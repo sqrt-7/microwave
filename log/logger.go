@@ -11,7 +11,6 @@ const (
 	LevelInfo
 	LevelWarning
 	LevelError
-	LevelPanic
 )
 
 var (
@@ -67,10 +66,6 @@ func (s *StandardLogger) Warning(msg string) Entry {
 
 func (s *StandardLogger) Error(msg string) Entry {
 	return s.newLogEntry(LevelError, msg)
-}
-
-func (s *StandardLogger) Panic(msg string) Entry {
-	return s.newLogEntry(LevelPanic, msg)
 }
 
 func (s *StandardLogger) Close() error {

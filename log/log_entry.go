@@ -65,8 +65,6 @@ func (l logEntry) Send() {
 		l.logger.Warn(l.message, l.logFields...)
 	case LevelError:
 		l.logger.Error(l.message, l.logFields...)
-	case LevelPanic:
-		l.logger.Panic(l.message, l.logFields...)
 	}
 }
 

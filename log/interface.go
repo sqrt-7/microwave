@@ -7,7 +7,6 @@ type Logger interface {
 	Info(string) Entry    // Init new LogEntry with level Info
 	Warning(string) Entry // Init new LogEntry with level Warning
 	Error(string) Entry   // Init new LogEntry with level Error
-	Panic(string) Entry   // Init new LogEntry with level Panic (will call panic())
 }
 
 type Entry interface {
