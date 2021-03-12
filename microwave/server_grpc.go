@@ -1,4 +1,4 @@
-package server
+package microwave
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"runtime/debug"
-	"sync"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
@@ -16,57 +15,35 @@ import (
 	"google.golang.org/grpc"
 )
 
-type GRPCServer struct {
-	server *grpc.Server
-
-	Logger     log.Logger
-	Port       string
-	WaitGroup  *sync.WaitGroup
-	ShutdownCh chan struct{}
-	ErrCh      chan error
+func NewGRPCServer(optUnaryInterceptors []grpc.UnaryServerInterceptor, optStreamInterceptors []grpc.StreamServerInterceptor) *grpc.Server {
+	return grpc.NewServer(
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(optUnaryInterceptors...)),
+		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(optStreamInterceptors...)),
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}), // this enables TraceID propagation
+	)
 }
 
-func (s *GRPCServer) Default(optUnaryInterceptors []grpc.UnaryServerInterceptor, optStreamInterceptors []grpc.StreamServerInterceptor) *GRPCServer {
-	unaryLogger := initUnaryLogger(s.Logger)
-	streamLogger := initStreamLogger(s.Logger)
+func DefaultGRPCInterceptors(logger log.Logger) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
+	unaryLogger := initUnaryLogger(logger)
+	streamLogger := initStreamLogger(logger)
 
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		unaryLogger,
-		grpc_recovery.UnaryServerInterceptor(grpc_recovery.WithRecoveryHandler(panicHandler(s.Logger))),
+		grpc_recovery.UnaryServerInterceptor(grpc_recovery.WithRecoveryHandler(panicHandler(logger))),
 		grpc_tags.UnaryServerInterceptor(),
 	}
 
 	streamInterceptors := []grpc.StreamServerInterceptor{
 		streamLogger,
-		grpc_recovery.StreamServerInterceptor(grpc_recovery.WithRecoveryHandler(panicHandler(s.Logger))),
+		grpc_recovery.StreamServerInterceptor(grpc_recovery.WithRecoveryHandler(panicHandler(logger))),
 		grpc_tags.StreamServerInterceptor(),
 	}
 
-	if optUnaryInterceptors != nil {
-		unaryInterceptors = append(unaryInterceptors, optUnaryInterceptors...)
-	}
-
-	if optStreamInterceptors != nil {
-		streamInterceptors = append(streamInterceptors, optStreamInterceptors...)
-	}
-
-	return s.NewGRPCServer(optUnaryInterceptors, optStreamInterceptors)
+	return unaryInterceptors, streamInterceptors
 }
 
-func (s *GRPCServer) NewGRPCServer(optUnaryInterceptors []grpc.UnaryServerInterceptor, optStreamInterceptors []grpc.StreamServerInterceptor) *GRPCServer {
-	server := grpc.NewServer(
-		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(optUnaryInterceptors...)),
-		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(optStreamInterceptors...)),
-		grpc.StatsHandler(&ocgrpc.ServerHandler{}), // this enables TraceID propagation
-	)
-
-	s.server = server
-
-	return s
-}
-
-func (s *GRPCServer) Run() {
-	defer s.WaitGroup.Done()
+func (s GRPCWrapper) Run(mw *Microwave) {
+	defer mw.wg.Done()
 
 	if string(s.Port[0]) != ":" {
 		s.Port = ":" + s.Port
@@ -74,24 +51,24 @@ func (s *GRPCServer) Run() {
 
 	lis, err := net.Listen("tcp", s.Port)
 	if err != nil {
-		s.Logger.Error("GRPC_SERVER_ERROR").WithField("error", err.Error()).Send()
-		s.ErrCh <- err
+		mw.logger.Error("GRPC_SERVER_ERROR").WithField("error", err.Error()).Send()
+		mw.errCh <- err
 		return
 	}
 
 	go func() {
-		if err := s.server.Serve(lis); err != nil {
-			s.Logger.Error("GRPC_SERVER_ERROR").WithField("error", err.Error()).Send()
-			s.ErrCh <- err
+		if err := s.Server.Serve(lis); err != nil {
+			mw.logger.Error("GRPC_SERVER_ERROR").WithField("error", err.Error()).Send()
+			mw.errCh <- err
 		}
 	}()
 
-	s.Logger.Info("GRPC_SERVER_STARTED").WithField("port", s.Port).Send()
+	mw.logger.Info("GRPC_SERVER_STARTED").WithField("port", s.Port).Send()
 
-	<-s.ShutdownCh
+	<-mw.shutdownCh
 
-	s.server.GracefulStop()
-	s.Logger.Info("GRPC_SERVER_STOPPED").WithField("port", s.Port).Send()
+	s.Server.GracefulStop()
+	mw.logger.Info("GRPC_SERVER_STOPPED").WithField("port", s.Port).Send()
 }
 
 // initUnaryLogger creates a logger for unary requests
